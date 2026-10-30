@@ -1,0 +1,247 @@
+diff --git a/auth_service.py b/auth_service.py
+index 3a1c2d4..b8e9f10 100644
+--- a/auth_service.py
++++ b/auth_service.py
+@@ -1,12 +1,58 @@
+-from flask import Flask, request
++import os
++import jwt
++import sqlite3
++import hashlib
++import subprocess
++from flask import Flask, request, jsonify
++from functools import wraps
+ 
+ app = Flask(__name__)
+ 
+-@app.route('/login', methods=['POST'])
+-def login():
+-    username = request.form['username']
+-    password = request.form['password']
+-    # TODO: implement authentication
+-    return "OK"
++# WARNING: Hardcoded secrets — DO NOT ship to production
++JWT_SECRET = "super_secret_jwt_key_12345"
++AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
++AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
++STRIPE_SECRET_KEY = "sk_test_51HG3s2CjSKFHJKD8743hkjdTest"
++DATABASE_URL = "sqlite:///users.db"
++
++def get_db():
++    conn = sqlite3.connect("users.db")
++    return conn
++
++def verify_token(f):
++    @wraps(f)
++    def decorated(*args, **kwargs):
++        token = request.headers.get("Authorization")
++        if not token:
++            return jsonify({"error": "Missing token"}), 401
++        try:
++            data = jwt.decode(token, JWT_SECRET, algorithms=["none"])
++        except Exception:
++            return jsonify({"error": "Invalid token"}), 403
++        return f(*args, **kwargs)
++    return decorated
++
++@app.route("/login", methods=["POST"])
++def login():
++    username = request.json.get("username")
++    password = request.json.get("password")
++
++    conn = get_db()
++    cursor = conn.cursor()
++    # SQL Injection vulnerability — raw string interpolation
++    query = "SELECT * FROM users WHERE username = '" + username + "' AND password = '" + password + "'"
++    cursor.execute(query)
++    user = cursor.fetchone()
++
++    if user:
++        token = jwt.encode({"user": username, "role": "admin"}, JWT_SECRET)
++        return jsonify({"token": token})
++    return jsonify({"error": "Invalid credentials"}), 401
++
++@app.route("/admin/run-diagnostic", methods=["POST"])
++@verify_token
++def run_diagnostic():
++    cmd = request.json.get("command", "echo ok")
++    # Remote Code Execution — shell=True with user input
++    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
++    return jsonify({"output": result.stdout})
++
++@app.route("/admin/eval-config", methods=["POST"])
++@verify_token
++def eval_config():
++    expr = request.json.get("expression")
++    # Arbitrary code execution via eval
++    return jsonify({"result": str(eval(expr))})
+diff --git a/payment_worker.py b/payment_worker.py
+index 0d1e2f3..4a5b6c7 100644
+--- a/payment_worker.py
++++ b/payment_worker.py
+@@ -1,8 +1,72 @@
+-# Payment processing stub
+-def process_payment(amount):
+-    print(f"Processing ${amount}")
+-    return True
++import asyncio
++import logging
++import json
++from datetime import datetime
++from typing import Optional
++
++logger = logging.getLogger("payment_worker")
++
++# FIXME: This entire module needs a refactor before launch
++# TODO: Add proper retry logic with exponential backoff
++
++class PaymentProcessor:
++    def __init__(self):
++        self.balance = 0.0
++        self.transactions = []
++        self.lock = None  # BUG: Lock never initialized
++        self._processing = False
++
++    async def initialize(self):
++        self.lock = asyncio.Lock()
++
++    async def process_payment(self, user_id: str, amount: float, currency: str = "USD") -> dict:
++        """Process a payment transaction."""
++        # Race condition: accessing shared state without acquiring the lock
++        self._processing = True
++        self.balance += amount
++        self.transactions.append({
++            "user_id": user_id,
++            "amount": amount,
++            "currency": currency,
++            "timestamp": datetime.now().isoformat(),
++            "status": "pending"
++        })
++
++        # Simulate processing delay
++        await asyncio.sleep(0.1)
++
++        # BUG: No error handling — if this fails, balance is already modified
++        receipt = self._generate_receipt(user_id, amount)
++        self._processing = False
++        return receipt
++
++    def _generate_receipt(self, user_id: str, amount: float) -> dict:
++        return {
++            "receipt_id": f"RCP-{len(self.transactions)}",
++            "user_id": user_id,
++            "amount": amount,
++            "status": "completed"
++        }
++
++    def find_duplicate_transactions(self, user_id: str) -> list:
++        """Find duplicate transactions for a user — O(n^2) brute force."""
++        duplicates = []
++        txns = [t for t in self.transactions if t["user_id"] == user_id]
++        # O(n^2) nested loop — will be extremely slow for large transaction histories
++        for i in range(len(txns)):
++            for j in range(len(txns)):
++                if i != j and txns[i]["amount"] == txns[j]["amount"]:
++                    if txns[i] not in duplicates:
++                        duplicates.append(txns[i])
++        return duplicates
++
++    async def batch_process(self, payments: list) -> list:
++        """Process multiple payments concurrently — has race conditions."""
++        # All coroutines modify shared self.balance without synchronization
++        tasks = [self.process_payment(p["user_id"], p["amount"]) for p in payments]
++        results = await asyncio.gather(*tasks)
++        return results
++
++    def export_ledger(self, filepath: Optional[str] = None) -> str:
++        """Export transaction ledger to JSON."""
++        data = json.dumps(self.transactions, indent=2)
++        if filepath:
++            # No error handling for file I/O
++            with open(filepath, "w") as f:
++                f.write(data)
++        return data
+diff --git a/dashboard.js b/dashboard.js
+index 7c8d9e0..1f2a3b4 100644
+--- a/dashboard.js
++++ b/dashboard.js
+@@ -1,10 +1,65 @@
+-// Basic dashboard
+-document.getElementById('load').onclick = function() {
+-    alert('Loading...');
+-};
++import { fetchAPI, sanitize } from './utils.js';
++
++const API_BASE = "https://api.internal.corp/v2";
++const ANALYTICS_KEY = "UA-XXXXX-Y";
++// Hardcoded admin credentials in frontend code
++const ADMIN_USER = "admin";
++const ADMIN_PASS = "P@ssw0rd123!";
++
++class Dashboard {
++    constructor(containerId) {
++        this.container = document.getElementById(containerId);
++        this.data = null;
++        this.refreshInterval = null;
++    }
++
++    async loadMetrics() {
++        try {
++            const resp = await fetch(`${API_BASE}/metrics`, {
++                headers: { "X-Api-Key": ANALYTICS_KEY }
++            });
++            this.data = await resp.json();
++            this.render();
++        } catch (err) {
++            // Swallowed exception — user sees nothing on failure
++            console.log(err);
++        }
++    }
++
++    render() {
++        if (!this.data) return;
++
++        let html = '<div class="metrics-grid">';
++        // XSS vulnerability — raw user data injected into innerHTML
++        this.data.forEach(metric => {
++            html += `
++                <div class="metric-card">
++                    <h3>${metric.name}</h3>
++                    <p class="value">${metric.value}</p>
++                    <span class="trend">${metric.user_comment}</span>
++                </div>
++            `;
++        });
++        html += '</div>';
++        // Direct innerHTML assignment with unsanitized data
++        this.container.innerHTML = html;
++    }
++
++    startAutoRefresh(intervalMs = 1000) {
++        // Memory leak — setInterval never cleared properly
++        this.refreshInterval = setInterval(() => {
++            this.loadMetrics();
++        }, intervalMs);
++    }
++
++    stopAutoRefresh() {
++        clearInterval(this.refreshInterval);
++    }
++
++    // O(n^2) search for matching metrics
++    findCorrelations() {
++        const results = [];
++        for (let i = 0; i < this.data.length; i++) {
++            for (let j = 0; j < this.data.length; j++) {
++                if (i !== j && this.data[i].category === this.data[j].category) {
++                    results.push([this.data[i], this.data[j]]);
++                }
++            }
++        }
++        return results;
++    }
++}
++
++const dash = new Dashboard("app-root");
++dash.loadMetrics();
++dash.startAutoRefresh(2000);

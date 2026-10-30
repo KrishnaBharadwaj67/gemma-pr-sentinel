@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DiffShield — Air-Gapped PR Intelligence</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+  <link rel="stylesheet" href="/static/styles.css">
+  <!-- Offline-safe font stack: Inter + JetBrains Mono via system fallbacks in CSS -->
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+  </style>
+</head>
+<body>
+  <!-- ═══ TOP NAVIGATION BAR ═══ -->
+  <nav class="top-nav">
+    <a class="nav-brand" href="/">
+      <svg class="shield-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #6366F1;">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        <path d="M9 12l2 2 4-4" stroke="#10B981" stroke-width="2.5"/>
+      </svg>
+      <div>
+        <span class="brand-text">DiffShield</span>
+        <span class="brand-sub">// Air-Gapped PR Intelligence</span>
+      </div>
+    </a>
+
+    <div class="nav-center">
+      <div class="privacy-badge">
+        <span class="pulse-dot"></span>
+        100% LOCAL EXECUTION • ZERO CLOUD EGRESS
+      </div>
+    </div>
+
+    <div class="nav-right">
+      <div class="model-selector">
+        <select id="model-select">
+          <option value="gemma3:4b">gemma3:4b</option>
+          <option value="gemma2:9b">gemma2:9b</option>
+          <option value="gemma:2b">gemma:2b</option>
+          <option value="static-heuristics-only">Static Heuristics Only</option>
+        </select>
+      </div>
+
+      <div class="telemetry-pill" id="telemetry-pill">
+        <div class="tele-item">
+          <span id="tele-latency">— ms</span>
+        </div>
+        <div class="tele-divider"></div>
+        <div class="tele-item">
+          <span id="tele-tokens">— tok</span>
+        </div>
+        <div class="tele-divider"></div>
+        <div class="tele-item">
+          <span class="status-dot offline" id="status-dot"></span>
+          <span id="tele-status">CHECKING</span>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ═══ MAIN 3-ZONE BENTO LAYOUT ═══ -->
+  <main class="main-layout">
+    <!-- ── LEFT SIDEBAR: Ingestion & File Tree ── -->
+    <aside class="sidebar-left">
+      <!-- Input tabs header -->
+      <div class="input-tabs">
+        <button class="input-tab active" data-tab="paste">Paste Diff</button>
+        <button class="input-tab" data-tab="repo">Git Repo Path</button>
+        <button class="input-tab" data-tab="upload">Upload .patch</button>
+      </div>
+
+      <!-- Tab: Paste Diff -->
+      <div class="tab-content active" id="tab-paste">
+        <textarea class="diff-textarea" id="diff-input" placeholder="Paste your unified diff here...&#10;&#10;Example:&#10;diff --git a/file.py b/file.py&#10;@@ -1,5 +1,7 @@&#10;+import os&#10; ..."></textarea>
+        <button class="btn btn-primary btn-scan" id="btn-review-paste" onclick="DiffShield.reviewFromPaste()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          Analyze Diff
+        </button>
+      </div>
+
+      <!-- Tab: Git Repo Path -->
+      <div class="tab-content" id="tab-repo">
+        <input type="text" class="path-input" id="repo-path-input" placeholder="/path/to/local/git/repo">
+        <button class="btn btn-primary btn-scan" onclick="DiffShield.reviewFromRepo()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+          Scan Repository
+        </button>
+      </div>
+
+      <!-- Tab: Upload .patch -->
+      <div class="tab-content" id="tab-upload">
+        <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span class="upload-text">Drop a .patch or .diff file</span>
+          <span class="upload-hint">or click to browse</span>
+        </div>
+        <input type="file" id="file-input" accept=".patch,.diff,.txt" onchange="DiffShield.handleFileUpload(event)">
+      </div>
+
+      <!-- Demo button -->
+      <div style="padding: 12px 16px; border-top: 1px solid var(--border-subtle);">
+        <button class="btn btn-demo" onclick="DiffShield.loadDemoPatch()">
+          ⚡ Load Hackathon Demo Patch
+        </button>
+      </div>
+
+      <!-- File tree -->
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+          Modified Files
+        </div>
+      </div>
+      <div class="file-tree" id="file-tree">
+        <div style="padding: 20px 16px; text-align: center; color: var(--text-muted); font-size: 11px;">
+          No files loaded yet
+        </div>
+      </div>
+    </aside>
+
+    <!-- ── CENTER STAGE: Diff Viewer & Inline Annotations ── -->
+    <section class="center-stage" id="center-stage">
+      <!-- Empty state -->
+      <div class="empty-state" id="empty-state">
+        <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          <path d="M9 12l2 2 4-4" stroke-width="1.5"/>
+        </svg>
+        <h2>Ready to Review</h2>
+        <p>Paste a unified diff, point to a local Git repository, upload a .patch file, or click the demo button to see DiffShield in action.</p>
+      </div>
+
+      <!-- Executive Summary (hidden until review) -->
+      <div class="exec-summary" id="exec-summary" style="display: none;">
+        <div class="summary-header">
+          <!-- SVG Risk Gauge -->
+          <div class="risk-gauge-container">
+            <div class="risk-gauge" id="risk-gauge">
+              <svg viewBox="0 0 100 100">
+                <circle class="gauge-bg" cx="50" cy="50" r="42"/>
+                <circle class="gauge-fill" id="gauge-fill" cx="50" cy="50" r="42"
+                  stroke-dasharray="263.89"
+                  stroke-dashoffset="263.89"/>
+              </svg>
+              <div class="gauge-score">
+                <span class="score-number" id="score-number">0</span>
+                <span class="score-label">Risk</span>
+              </div>
+            </div>
+          </div>
+          <div class="summary-info">
+            <h2>
+              PR Review Complete
+              <span class="engine-badge" id="engine-badge">—</span>
+            </h2>
+            <p class="summary-text" id="summary-text">—</p>
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <span class="verdict-badge" id="verdict-badge">—</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Diff viewer container -->
+      <div class="diff-viewer" id="diff-viewer"></div>
+    </section>
+
+    <!-- ── RIGHT SIDEBAR: Metrics & Actions ── -->
+    <aside class="sidebar-right" id="sidebar-right">
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+          Issue Breakdown
+        </div>
+      </div>
+      <div class="metrics-grid" id="metrics-grid">
+        <div class="metric-card critical">
+          <div class="metric-value" id="metric-critical">0</div>
+          <div class="metric-label">Critical</div>
+        </div>
+        <div class="metric-card security">
+          <div class="metric-value" id="metric-security">0</div>
+          <div class="metric-label">Security</div>
+        </div>
+        <div class="metric-card logic">
+          <div class="metric-value" id="metric-logic">0</div>
+          <div class="metric-label">Logic / Perf</div>
+        </div>
+        <div class="metric-card style">
+          <div class="metric-value" id="metric-style">0</div>
+          <div class="metric-label">Style / Other</div>
+        </div>
+      </div>
+
+      <!-- Severity filters -->
+      <div class="filter-section">
+        <div class="sidebar-section-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          Filter by Severity
+        </div>
+        <div class="filter-pills" id="filter-pills">
+          <button class="filter-pill active critical" data-severity="CRITICAL" onclick="DiffShield.toggleFilter('CRITICAL', this)">Critical</button>
+          <button class="filter-pill active warning" data-severity="WARNING" onclick="DiffShield.toggleFilter('WARNING', this)">Warning</button>
+          <button class="filter-pill active nitpick" data-severity="NITPICK" onclick="DiffShield.toggleFilter('NITPICK', this)">Nitpick</button>
+        </div>
+      </div>
+
+      <!-- Export actions -->
+      <div class="action-section">
+        <div class="sidebar-section-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export Review
+        </div>
+        <button class="btn btn-secondary" onclick="DiffShield.exportMarkdown()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          Export PR Review (.md)
+        </button>
+        <button class="btn btn-secondary" onclick="DiffShield.copyGitHubComment()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          Copy GitHub Comment
+        </button>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ═══ LOADING OVERLAY ═══ -->
+  <div class="loading-overlay" id="loading-overlay">
+    <div class="loading-spinner"></div>
+    <div class="loading-text" id="loading-text">Analyzing code with DiffShield…</div>
+    <div class="loading-sub" id="loading-sub">Running static security scan + Gemma AI deep review</div>
+  </div>
+
+  <!-- ═══ TOAST CONTAINER ═══ -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
